@@ -1,3 +1,8 @@
+/**
+ * RUT BASTONI - 04/05/2017 - MODIFICA LIBRERIA BASATA SU:
+ * https://github.com/joostvunderink/angular-jsonrpc-client
+ * E NON PIù AGGIORNATA DA TANTO
+ */
 (function() {
   'use strict';
 
@@ -25,9 +30,22 @@
 
   function JsonRpcServerError(error) {
       this.name    = ERROR_TYPE_SERVER;
-      this.message = error.message;
+      //--RUT - 05/05/2017 - FIX CASI IN CUI ERROR è VUOTO
+      //RIF. https://sentry.io/redarea/rikorda/issues/257899916/
+      // this.message = error.message;
+      // this.error   = error;
+      // this.data    = error.data;
+      var message = '';
+      var data = '';
+      if(angular.isObject(error)){
+        message = angular.isDefined(error.message) ? error.message : JSON.stringify(error);
+      }
+      else if(angular.isString(error)){
+        data = angular.isDefined(error.data) ? error.data : JSON.stringify(error);
+      }
+      this.message = message;
       this.error   = error;
-      this.data    = error.data;
+      this.data    = data;
   }
   JsonRpcServerError.prototype = Error.prototype;
 
@@ -52,11 +70,17 @@
       JsonRpcConfigError   : JsonRpcConfigError
     };
 
-    function _getInputData(methodName, args) {
-      id += 1;
+    function _getInputData(methodName, args, isBatch) {
+      //--Rut  25/10/2017 - modulo modificato per accettare un identificativo chiamata ai servizi custom
+      if(isBatch || !jsonrpcConfig.idForRequest){
+        id += 1;
+      }
+
+      var requestId = (isBatch || !jsonrpcConfig.idForRequest) ? id : jsonrpcConfig.idForRequest;
+
       return {
         jsonrpc: '2.0',
-        id     : id,
+        id     : requestId,
         method : methodName,
         params : args
       }
@@ -103,7 +127,10 @@
       return angular.extend(headers, DEFAULT_HEADERS);
     }
 
-    function _determineErrorDetails(data, status, url) {
+    // Situation 2 or 3.
+    //--RUT - 04/05/2017 - INCLUDIAMO ANCHE PIù DETTAGLI POSSIBILI PER REQUEST/RESPONSE
+    // var errorDetails = _determineErrorDetails(response.data, response.status, server.url, response);
+    function _determineErrorDetails(data, status, url, responseObject) {
       // 2. Call was received by the server. Server returned an error.
       // 3. Call did not arrive at the server.
       var errorType = ERROR_TYPE_TRANSPORT;
@@ -131,7 +158,14 @@
         }
       }
       else if (status === -1) {
-        errorMessage = 'Timeout or cancelled';
+        // errorMessage = 'Timeout or cancelled';
+        //--RUT - 04/05/2017 - INCLUDIAMO ANCHE PIù DETTAGLI POSSIBILI PER REQUEST/RESPONSE
+        // NON INSERIAMO L'OGGETTO 'HEADERS' PERCHE è UNA FUNZIONE E COMUNQUE GLI HEADERS SI DESUMONO DALL'OGGETTO CONFIG
+        var detailRequest = JSON.stringify({
+          data: responseObject.data, status: responseObject.status, config: responseObject.config, statusText: responseObject.statusText
+        });
+
+        errorMessage = 'Timeout or cancelled - REQUEST DETAILS: ' + detailRequest;
       }
       else {
         // Situation 3
@@ -165,7 +199,7 @@
         return deferred.promise;
       }
 
-      var inputData = _getInputData(args.methodName, args.methodArgs);
+      var inputData = _getInputData(args.methodName, args.methodArgs, false);
       var headers = _determineHeaders(args.serverName);
 
       var req = {
@@ -198,30 +232,57 @@
       // We are assuming that the server can use either 200 or 500 as
       // http return code in situation 2. That depends on the server
       // implementation and is not determined by the JSON-RPC spec.
-      promise.success(function(data, status, headers, config) {
+      // promise.success(function(data, status, headers, config) {
+      //--RUT - 04/05/2017 - IL METODO SUCCESS È STATO DEPRECATO MEGLIO NON USARLO PIU
+      /*
+       if (useLegacyPromise) {
+       promise.success = function(fn) {
+       assertArgFn(fn, 'fn');
+
+       promise.then(function(response) {
+       fn(response.data, response.status, response.headers, config);
+       });
+       return promise;
+       };
+
+       promise.error = function(fn) {
+       assertArgFn(fn, 'fn');
+
+       promise.then(null, function(response) {
+       fn(response.data, response.status, response.headers, config);
+       });
+       return promise;
+       };
+      * */
+      promise.then(function(response) {
+        //data, status, headers, config
         // In some cases, it is unfortunately possible to end up in
         // promise.success with data being undefined.
         // This is likely caused either by a bug in the $http service
         // or by incorrect usage of $http interceptors.
-        if (!data) {
+        if (!response.data) {
           return deferred.reject(
             'Unknown error, possibly caused by incorrectly configured $http interceptor. ' +
             'See https://github.com/joostvunderink/angular-jsonrpc-client/issues/16 for ' +
             'more information.');
         }
         
-        if (data.result !== undefined) {
+        if (response.data.result !== undefined) {
           // Situation 1
-          deferred.resolve(data.result);
+          deferred.resolve(response.data.result);
         }
         else {
           // Situation 2
-          deferred.reject(new JsonRpcServerError(data.error));
+          deferred.reject(new JsonRpcServerError(response.data.error));
         }
       })
-      .error(function(data, status, headers, config) {
+      // .error(function(data, status, headers, config) {
+      //--RUT - 04/05/2017 - IL METODO ERROR È STATO DEPRECATO MEGLIO NON USARLO PIU
+      .catch(function(response) {
         // Situation 2 or 3.
-        var errorDetails = _determineErrorDetails(data, status, server.url);
+        // var errorDetails = _determineErrorDetails(data, status, server.url);
+        //--RUT - 04/05/2017 - INCLUDIAMO ANCHE PIù DETTAGLI POSSIBILI PER REQUEST/RESPONSE
+        var errorDetails = _determineErrorDetails(response.data, response.status, server.url, response);
 
         if (errorDetails.type === ERROR_TYPE_TRANSPORT) {
           deferred.reject(new JsonRpcTransportError(errorDetails.message));
@@ -239,7 +300,7 @@
       var _data = [];
 
       this.add = function(methodName, args) {
-        var data = _getInputData(methodName, args);
+        var data = _getInputData(methodName, args, true);
         var req = {
           deferred: $q.defer(),
           data: data,
@@ -283,8 +344,10 @@
           return promise;
         }
 
-        promise.success(function (data, status, headers, config) {
-          data.forEach(function(d) {
+        //--RUT - 04/05/2017 - IL METODO ERROR È STATO DEPRECATO MEGLIO NON USARLO PIU
+        // promise.success(function (data, status, headers, config) {
+        promise.success(function (response) {
+          response.data.forEach(function(d) {
             var deferred = _getDeferred(d.id);
 
             if (d.result !== undefined) {
@@ -297,12 +360,17 @@
             }
           });
         })
-        .error(function (data, status, headers, config) {
-          data.forEach(function(d) {
+        // .error(function(data, status, headers, config) {
+        //--RUT - 04/05/2017 - IL METODO ERROR È STATO DEPRECATO MEGLIO NON USARLO PIU
+        //     .catch(function(response) {
+        // .error(function (data, status, headers, config) {
+        //--RUT - 04/05/2017 - IL METODO ERROR È STATO DEPRECATO MEGLIO NON USARLO PIU
+        .error(function (response) {
+          response.data.forEach(function(d) {
             var deferred = _getDeferred(d.id);
 
             // Situation 2 or 3.
-            var errorDetails = _determineErrorDetails(d, status, server.url);
+            var errorDetails = _determineErrorDetails(d, response.status, server.url, response);
 
             if (errorDetails.type === ERROR_TYPE_TRANSPORT) {
               deferred.reject(new JsonRpcTransportError(errorDetails.message));
@@ -355,7 +423,9 @@
         throw new Error('Argument of "set" must be an object.');
       }
 
-      var allowedKeys = ['url', 'servers', 'returnHttpPromise'];
+      //--Rut - 25/10/2017 - ho esteso questo componente per permettere, in fase di configurazione, di impostare un id fisso
+      // per le chiamate json rpc
+      var allowedKeys = ['url', 'servers', 'returnHttpPromise', 'idForRequest'];
       var keys = Object.keys(args);
       keys.forEach(function(key) {
         if (allowedKeys.indexOf(key) < 0) {

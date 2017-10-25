@@ -1,2 +1,9 @@
 bower_components
 node_modules
+
+#IntelliJ IDEA files
+.idea/
+*.iml
+
+#developing files
+appunti e temp/
